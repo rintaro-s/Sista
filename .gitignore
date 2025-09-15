@@ -1,0 +1,42 @@
+# Node.js
+# -------------------------------------------------------------
+# Dependency directories
+node_modules/
+# Log files
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+# Runtime
+*.js.map
+*.ts.map
+*.coffee.map
+# Optional: IDE / Editor specific
+.idea/
+.vscode/
+
+# Django
+# -------------------------------------------------------------
+# Python bytecode
+*.pyc
+__pycache__/
+# Django specific files
+db.sqlite3
+# Media files
+media/
+# Static files
+staticfiles/
+# Virtual environment
+.venv/
+env/
+venv/
+# IDE
+.idea/
+.vscode/
+
+# VS Code
+# -------------------------------------------------------------
+.vscode/
+# Optional: User-specific settings that should not be shared
+.vscode/*.code-workspace
+# Local history for Git Lens
+.history/
