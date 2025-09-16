@@ -42,11 +42,14 @@ const getCategoryBorder = (category: string) => {
 
 export default function Home(): React.ReactElement {
   const [currentView, setCurrentView] = useState<string>("tasks");
-  const [tasks, setTasks] = useState<Task[]>([
-    { id: 1, title: "プレゼン資料作成", status: "active", category: "work", dueDate: "9/16" },
-    { id: 2, title: "英語の宿題", status: "pending", category: "study", dueDate: "9/17" },
-    { id: 3, title: "部屋の掃除", status: "done", category: "personal", dueDate: "9/15" },
-  ]);
+  const [tasks, setTasks] = useState<Task[]>([]);
+
+  const [userToken, setUserToken] = useState<string | null>(typeof window !== 'undefined' ? localStorage.getItem('sista_token') : null);
+  const [username, setUsername] = useState<string | null>(typeof window !== 'undefined' ? localStorage.getItem('sista_user') : null);
+  const [showAuthModal, setShowAuthModal] = useState(false);
+  const [authMode, setAuthMode] = useState<'login'|'register'>('login');
+  const [authName, setAuthName] = useState('');
+  const [authPass, setAuthPass] = useState('');
 
   const [newTask, setNewTask] = useState<string>("");
   const [selectedFilter, setSelectedFilter] = useState<string>("all");
@@ -56,20 +59,92 @@ export default function Home(): React.ReactElement {
 
   const addTask = () => {
     if (!newTask.trim()) return;
-    const taskObj: Task = {
-      id: Date.now(),
+    const payload = {
       title: newTask,
       status: "pending",
       category: "personal",
-      dueDate: new Date().toLocaleDateString("ja-JP", { month: "numeric", day: "numeric" }),
+      due_date: new Date().toLocaleDateString("ja-JP", { month: "numeric", day: "numeric" }),
     };
-    setTasks((p) => [...p, taskObj]);
-    setNewTask("");
-    setShowAddForm(false);
+    const headers: any = { "Content-Type": "application/json" };
+    if (userToken) headers['Authorization'] = `Bearer ${userToken}`;
+    fetch("http://localhost:8000/tasks", {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ ...payload, user_id: undefined }),
+    })
+      .then((r) => r.json())
+      .then((created) => {
+        setTasks((p) => [...p, { id: created.id, title: created.title, status: created.status as Task['status'], category: created.category || 'personal', dueDate: created.due_date || '' }]);
+        setNewTask("");
+        setShowAddForm(false);
+      })
+      .catch(console.error);
   };
 
-  const updateTaskStatus = (taskId: number, newStatus: Task["status"]) => setTasks((p) => p.map((t) => (t.id === taskId ? { ...t, status: newStatus } : t)));
-  const deleteTask = (taskId: number) => setTasks((p) => p.filter((t) => t.id !== taskId));
+  const updateTaskStatus = (taskId: number, newStatus: Task["status"]) => {
+    const headers: any = { "Content-Type": "application/json" };
+    if (userToken) headers['Authorization'] = `Bearer ${userToken}`;
+    fetch(`http://localhost:8000/tasks/${taskId}`, {
+      method: "PUT",
+      headers,
+      body: JSON.stringify({ title: tasks.find(t => t.id === taskId)?.title || '', status: newStatus, category: tasks.find(t => t.id === taskId)?.category, user_id: undefined }),
+    })
+      .then((r) => r.json())
+      .then((updated) => setTasks((p) => p.map((t) => (t.id === taskId ? { ...t, status: updated.status as Task['status'] } : t))))
+      .catch(console.error);
+  };
+
+  const deleteTask = (taskId: number) => {
+  const headers: any = {};
+  if (userToken) headers['Authorization'] = `Bearer ${userToken}`;
+  fetch(`http://localhost:8000/tasks/${taskId}`, { method: "DELETE", headers })
+      .then(() => setTasks((p) => p.filter((t) => t.id !== taskId)))
+      .catch(console.error);
+  };
+
+  // load tasks
+  React.useEffect(() => {
+    const headers: any = {};
+    if (userToken) headers['Authorization'] = `Bearer ${userToken}`;
+    fetch("http://localhost:8000/tasks", { headers })
+      .then((r) => r.json())
+      .then((data) => {
+        setTasks(data.map((d: any) => ({ id: d.id, title: d.title, status: d.status, category: d.category || 'personal', dueDate: d.due_date || '' })));
+      })
+      .catch(console.error);
+  }, []);
+
+  // auth actions
+  const doAuth = () => {
+    const url = authMode === 'login' ? '/auth/login' : '/auth/register';
+    fetch(`http://localhost:8000${url}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username: authName, password: authPass }),
+    })
+      .then(r => r.json())
+      .then((data) => {
+        if (data.access_token) {
+          localStorage.setItem('sista_token', data.access_token);
+          localStorage.setItem('sista_user', authName);
+          setUserToken(data.access_token);
+          setUsername(authName);
+          setShowAuthModal(false);
+          // refresh tasks for this user
+          const headers: any = {};
+          if (data.access_token) headers['Authorization'] = `Bearer ${data.access_token}`;
+          fetch("http://localhost:8000/tasks", { headers }).then(r => r.json()).then((d) => setTasks(d.map((t:any) => ({ id: t.id, title: t.title, status: t.status, category: t.category || 'personal', dueDate: t.due_date || '' })))).catch(console.error);
+        }
+      })
+      .catch(console.error);
+  };
+
+  const logout = () => {
+    localStorage.removeItem('sista_token');
+    localStorage.removeItem('sista_user');
+    setUserToken(null);
+    setUsername(null);
+  }
 
   return (
     <div className="min-h-screen bg-white">
@@ -91,7 +166,14 @@ export default function Home(): React.ReactElement {
               </nav>
             </div>
             <div className="flex items-center space-x-4">
-              <User className="w-10 h-10 p-2 text-gray-400 bg-gray-100 rounded-full" aria-hidden />
+              {username ? (
+                <div className="flex items-center space-x-3">
+                  <div className="text-sm text-gray-700">{username}</div>
+                  <button onClick={logout} className="px-3 py-1 bg-red-50 text-red-600 rounded">ログアウト</button>
+                </div>
+              ) : (
+                <button onClick={() => { setAuthMode('login'); setShowAuthModal(true); }} className="px-3 py-1 bg-gray-100 rounded">ログイン</button>
+              )}
             </div>
           </div>
         </div>
@@ -253,6 +335,28 @@ export default function Home(): React.ReactElement {
         )}
 
       </main>
+
+      {/* auth modal */}
+      {showAuthModal && (
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50">
+          <div className="bg-white rounded-lg p-6 w-full max-w-md">
+            <h3 className="text-lg font-medium mb-4">{authMode === 'login' ? 'ログイン' : '新規登録'}</h3>
+            <div className="space-y-3">
+              <input className="w-full px-3 py-2 border rounded" placeholder="ユーザー名" value={authName} onChange={(e) => setAuthName(e.target.value)} />
+              <input className="w-full px-3 py-2 border rounded" placeholder="パスワード" type="password" value={authPass} onChange={(e) => setAuthPass(e.target.value)} />
+              <div className="flex justify-between items-center">
+                <div>
+                  <button onClick={() => { setAuthMode(authMode === 'login' ? 'register' : 'login'); }} className="text-sm text-blue-600">{authMode === 'login' ? 'アカウント作成' : 'ログイン画面へ'}</button>
+                </div>
+                <div className="flex space-x-2">
+                  <button onClick={() => setShowAuthModal(false)} className="px-3 py-2 border rounded">キャンセル</button>
+                  <button onClick={doAuth} className="px-4 py-2 bg-gray-900 text-white rounded">{authMode === 'login' ? 'ログイン' : '登録'}</button>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

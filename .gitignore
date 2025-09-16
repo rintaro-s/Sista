@@ -40,3 +40,10 @@ venv/
 .vscode/*.code-workspace
 # Local history for Git Lens
 .history/
+
+# pnpm
+# -------------------------------------------------------------
+.pnpm-store/
+node_modules/.pnpm/
+.pnpm-debug.log
+.pnpmfile.cjs

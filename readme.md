@@ -1,3 +1,41 @@
+# Sista — 最初の一歩を代行するアシスタント
+
+このリポジトリは、Next.js フロントエンドと FastAPI バックエンド、PostgreSQL を Docker Compose で起動できるフルスタックのサンプル実装です。
+
+目的:
+- タスク（最初の一歩）を作成・一覧・更新・削除できるアプリを、DB で永続化して提供します。
+- フロントは `sample_design.ts` に沿ったモダンな UI を実装しています。
+
+主な構成:
+- frontend/: Next.js + Tailwind の UI
+- backend/: FastAPI + SQLModel（Postgres に永続化）
+- docker-compose.yml: db/backend/frontend をまとめて起動
+
+クイックスタート（Docker Compose）
+
+1) 必要なツール
+- Docker と Docker Compose
+
+2) 起動
+
+```bash
+docker compose up --build
+```
+
+3) アクセス
+- フロントエンド: http://localhost:3000
+- バックエンド（API）: http://localhost:8000/tasks
+
+開発メモ
+- バックエンドの依存は `backend/requirements.txt` にあります。
+- フロントはローカルバインドマウントしているため、ソースを編集すると即座に反映されます（pnpm dev を実行）。
+
+次の作業（提案）
+- 本番用ビルドやリバースプロキシ設定（nginx）
+- マイグレーションツール（alembic 等）の導入
+- 認証（ユーザー管理）
+
+以上です。
 # コンセプト
 あなたがタスクを先延ばししている間、Sistaが「最初の一歩」を代行・誘導・（場合によっては）強制してくれる。
 
@@ -26,3 +64,5 @@
 
 このリポジトリは、README に書かれているコンセプトに基づいたプロジェクト実装です。
 フロントエンドに Next.js、バックエンドに FastAPI を使い、ローカルの LMStudio 等にプロンプトを投げて「Sista」の応答を取得します。
+
+
