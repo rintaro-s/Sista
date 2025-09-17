@@ -9,7 +9,9 @@ from jose import JWTError, jwt
 from fastapi import Depends, Header
 from fastapi.security import OAuth2PasswordRequestForm
 from pydantic import BaseModel
+from typing import Dict, Any
 import requests
+from ai_client import call_llm
 
 # simple JWT settings (for demo)
 SECRET_KEY = os.environ.get("SECRET_KEY", "dev-secret-key")
@@ -190,6 +192,18 @@ class ChatRequest(BaseModel):
     compressed_memory: Optional[dict] = None
 
 
+class AIDecomposeRequest(BaseModel):
+    prompt: str
+
+
+class AITodo(BaseModel):
+    id: int
+    title: str
+    status: str = "pending"
+    note: Optional[str] = None
+    order: Optional[int] = None
+
+
 @app.post("/auth/register", response_model=Token)
 def register(user: UserCreate):
     with Session(engine) as session:
@@ -260,112 +274,117 @@ def proxy_chat(req: ChatRequest, authorization: Optional[str] = Header(None)):
     # get optional user id from authorization header early
     user_id = get_user_id_from_auth(authorization)
 
-    # First: if LMStudio local LLM is configured, forward there
-    LMSTUDIO_URL = os.environ.get('LMSTUDIO_URL')
-    if LMSTUDIO_URL:
-        # Prepare a generic payload for LMStudio/local LLMs. Many local LLM frontends accept {input} or {prompt}.
-        # Only include user_id if it is an integer; some LLM frontends expect numeric user ids
-        lm_payload = {
-            "input": req.text,
-            "history": req.history,
-            "role_sheet": req.role_sheet,
-            "over_hallucination": req.over_hallucination,
-            "compressed_memory": req.compressed_memory,
-        }
-        # attempt to coerce user_id to int; if not possible, omit it to avoid 422 from LM server
-        try:
-            if user_id is not None:
-                lm_payload_user_id = int(user_id)
-                lm_payload["user_id"] = lm_payload_user_id
-        except Exception:
-            # skip setting user_id if it cannot be parsed as int
-            pass
-        try:
-            r = requests.post(LMSTUDIO_URL, json=lm_payload, timeout=30)
-            r.raise_for_status()
-            data = r.json()
-            # Try several common keys for response text
-            assistant_text = ''
-            if isinstance(data, dict):
-                for k in ('response', 'text', 'output', 'result'):
-                    if k in data and data[k]:
-                        assistant_text = data[k]
-                        break
-                # some servers embed in results list
-                if not assistant_text and 'results' in data and isinstance(data['results'], list) and data['results']:
-                    first = data['results'][0]
-                    if isinstance(first, dict):
-                        assistant_text = first.get('content') or first.get('text') or str(first)
-                    else:
-                        assistant_text = str(first)
+    # Delegate to centralized ai_client
+    result = call_llm(
+        text=req.text,
+        history=req.history,
+        role_sheet=req.role_sheet,
+        user_id=user_id,
+        over_hallucination=req.over_hallucination,
+        compressed_memory=req.compressed_memory,
+    )
 
-            # store in DB
-            with Session(engine) as session:
-                chat = ChatMessage(user_id=user_id or 0, message=req.text, reply=assistant_text)
-                session.add(chat)
-                session.commit()
-                session.refresh(chat)
+    if 'error' in result:
+        # choose an appropriate HTTP status
+        raise HTTPException(status_code=502, detail=result['error'])
 
-            return {"response": assistant_text, "debug_info": {"lm_raw": data}, "compressed_memory": None, "created_at": chat.created_at.isoformat()}
-        except requests.exceptions.RequestException as e:
-            raise HTTPException(status_code=502, detail=f"LMStudio request failed: {e}")
+    assistant_text = result.get('response', '')
+    debug_info = result.get('debug_info')
 
-    # Next fallback: OpenAI if configured
-    OPENAI_KEY = os.environ.get('OPENAI_API_KEY')
-    if not OPENAI_KEY:
-        raise HTTPException(status_code=501, detail='No LLM configured. Set LMSTUDIO_URL or OPENAI_API_KEY on the server.')
+    # store in DB
+    with Session(engine) as session:
+        chat = ChatMessage(user_id=user_id or 0, message=req.text, reply=assistant_text)
+        session.add(chat)
+        session.commit()
+        session.refresh(chat)
 
-    model = os.environ.get('OPENAI_MODEL', 'gpt-3.5-turbo')
-    # user_id already retrieved above
-    # build messages list: include system prompt from role_sheet if provided
-    messages = []
-    if req.role_sheet and isinstance(req.role_sheet, dict):
-        tone = req.role_sheet.get('tone')
-        if tone:
-            messages.append({"role": "system", "content": f"You are an assistant. Tone: {tone}"})
-
-    # include history if provided
-    if req.history and isinstance(req.history, list):
-        for h in req.history:
-            role = h.get('role') if isinstance(h, dict) else 'user'
-            content = h.get('content') if isinstance(h, dict) else str(h)
-            messages.append({"role": role, "content": content})
-
-    messages.append({"role": "user", "content": req.text})
-
-    openai_url = 'https://api.openai.com/v1/chat/completions'
-    payload = {
-        "model": model,
-        "messages": messages,
-        "temperature": float(os.environ.get('OPENAI_TEMPERATURE', '0.7')),
-    }
-
-    headers = {"Authorization": f"Bearer {OPENAI_KEY}", "Content-Type": "application/json"}
-    try:
-        r = requests.post(openai_url, json=payload, headers=headers, timeout=20)
-        r.raise_for_status()
-        data = r.json()
-        # extract assistant content (first choice)
-        assistant_text = ''
-        try:
-            assistant_text = data.get('choices', [])[0].get('message', {}).get('content', '')
-        except Exception:
-            assistant_text = data.get('choices', [0])
-
-        debug_info = {"openai": {k: data.get(k) for k in ('usage',)}}
-
-        # store in DB
-        with Session(engine) as session:
-            chat = ChatMessage(user_id=user_id or 0, message=req.text, reply=assistant_text)
-            session.add(chat)
-            session.commit()
-            session.refresh(chat)
-
-        return {"response": assistant_text, "debug_info": debug_info, "compressed_memory": None, "created_at": chat.created_at.isoformat()}
-    except requests.exceptions.RequestException as e:
-        raise HTTPException(status_code=502, detail=f"LLM request failed: {e}")
+    return {"response": assistant_text, "debug_info": debug_info, "compressed_memory": result.get('compressed_memory'), "created_at": chat.created_at.isoformat()}
 
 
 @app.post("/api/execute")
 async def execute_step(req: dict):
     return {"result": f"『{req.get('task')}』の最初の一歩を実行しました！（妹が代行）"}
+
+
+# --- AI decomposition endpoint (returns JSON-formatted ToDo list) ---
+@app.post('/ai/todos')
+def ai_todos(req: AIDecomposeRequest, authorization: Optional[str] = Header(None)):
+    """
+    Produce a JSON ToDo list for a given prompt. This is a simple, deterministic decomposition
+    used by the Streamlit dashboard. Returns: {"todos": [AITodo, ...]}
+    """
+    prompt = (req.prompt or '').strip()
+    if not prompt:
+        return {"todos": []}
+
+    # Try to delegate decomposition to the LLM using centralized call_llm
+    user_id = get_user_id_from_auth(authorization)
+    llm_result = call_llm(text=prompt, history=None, role_sheet=None, user_id=user_id)
+    if 'error' in llm_result:
+        # Fall back to local heuristics but surface error info
+        # Keep behavior robust: return local decomposition plus debug
+        local = []
+        parts = [p.strip() for p in prompt.replace('、', ',').split(',') if p.strip()]
+        if len(parts) > 1:
+            for i, p in enumerate(parts):
+                local.append({"id": i+1, "title": p, "status": "pending", "order": i+1})
+            return {"todos": local, "debug": {"llm_error": llm_result.get('error')}}
+        sentences = [s.strip() for s in prompt.replace('。', '.').split('.') if s.strip()]
+        if len(sentences) > 1:
+            for i, s in enumerate(sentences):
+                local.append({"id": i+1, "title": s, "status": "pending", "order": i+1})
+            return {"todos": local, "debug": {"llm_error": llm_result.get('error')}}
+        words = prompt.split()
+        if len(words) <= 3:
+            local.append({"id": 1, "title": f"{prompt} を小さく試す", "status": "pending", "order": 1})
+            return {"todos": local, "debug": {"llm_error": llm_result.get('error')}}
+        for i, piece in enumerate([words[0], ' '.join(words[1:2] if len(words) > 1 else words[0:1]), '報告する']):
+            local.append({"id": i+1, "title": piece if piece else f"Step {i+1}", "status": "pending", "order": i+1})
+        return {"todos": local, "debug": {"llm_error": llm_result.get('error')}}
+
+    # llm_result has 'response' -- try to parse it into a list of todo titles
+    resp_text = llm_result.get('response') or ''
+    todos: List[Dict[str, Any]] = []
+
+    # If the model returned JSON array, try to parse
+    import json
+    parsed = None
+    try:
+        parsed = json.loads(resp_text)
+    except Exception:
+        parsed = None
+
+    if isinstance(parsed, list):
+        for i, item in enumerate(parsed):
+            # accept either strings or dicts with 'title'
+            if isinstance(item, str):
+                title = item
+            elif isinstance(item, dict):
+                title = item.get('title') or item.get('task') or str(item)
+            else:
+                title = str(item)
+            todos.append({"id": i+1, "title": title, "status": "pending", "order": i+1})
+        return {"todos": todos, "debug": {"llm_raw": llm_result.get('debug_info')}}
+
+    # Otherwise split by newlines/numbered lines or commas
+    lines = [l.strip() for l in resp_text.replace('、', ',').replace('\r', '').split('\n') if l.strip()]
+    if not lines:
+        lines = [p.strip() for p in resp_text.replace('、', ',').split(',') if p.strip()]
+
+    if lines:
+        # remove leading numbering like '1.' or '①'
+        import re
+        cleaned = []
+        for l in lines:
+            m = re.sub(r'^\s*[0-9０-９]+[\).．:：\s]+', '', l)
+            m = re.sub(r'^\s*[①-⑨]\s*', '', m)
+            cleaned.append(m.strip())
+        for i, c in enumerate(cleaned):
+            todos.append({"id": i+1, "title": c, "status": "pending", "order": i+1})
+        return {"todos": todos, "debug": {"llm_raw": llm_result.get('debug_info')}}
+
+    # Last resort: simple heuristic
+    parts = [p.strip() for p in prompt.replace('、', ',').split(',') if p.strip()]
+    for i, p in enumerate(parts):
+        todos.append({"id": i+1, "title": p, "status": "pending", "order": i+1})
+    return {"todos": todos, "debug": {"llm_raw": llm_result.get('debug_info')}}

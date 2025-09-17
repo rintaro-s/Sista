@@ -8,6 +8,8 @@ load_dotenv()
 # Config
 # Default to backend host port 8030 per user request. Can be overridden with API_BASE env var.
 API_BASE = os.getenv('API_BASE', 'http://localhost:8030')
+# 最大待機時間（秒）。環境変数で上書きできます。
+API_TIMEOUT = int(os.getenv('API_TIMEOUT', '120'))
 st.set_page_config(page_title='Sista', layout='centered', initial_sidebar_state="collapsed")
 
 # Ensure session fields
@@ -253,13 +255,19 @@ def post_chat(message):
     }
     try:
         resp = requests.post(API_CHAT, json=payload, timeout=20, headers=_auth_headers())
+        # DEBUG: surface response status and body when in developer_mode for diagnosis
+        if st.session_state.get('developer_mode'):
+            try:
+                st.write({'request_url': API_CHAT, 'payload': payload})
+                st.write({'status_code': resp.status_code, 'response_text': resp.text})
+            except Exception:
+                pass
     except Exception as e:
-        # Network error: fallback to local mock but return False to indicate not authoritative
-        st.warning(f"LLM server unreachable, falling back to local response: {e}")
-        reply = 'ローカル応答: ' + ('; '.join(ai_decompose(message)) if ai_decompose(message) else '了解しました')
+        # Network error: fallback: サーバーが落ちている場合はエラーのみ返す
+        st.warning(f"LLMサーバーに接続できませんでした: {e}")
+        reply = '（サーバーに接続できませんでした）'
         st.session_state.local_chats.append({'created_at': now, 'message': f'You: {message}'})
         st.session_state.local_chats.append({'created_at': now, 'message': reply})
-        # also append to messages history for UI
         st.session_state.messages.append({"role": "user", "content": message})
         st.session_state.messages.append({"role": "assistant", "content": reply})
         return False
@@ -302,15 +310,7 @@ def post_chat(message):
 
 
 # ---------- AI fallback ----------
-def ai_decompose(prompt: str):
-    steps = []
-    if not prompt: return steps
-    parts = [p.strip() for p in prompt.replace('、', ',').split(',') if p.strip()]
-    if len(parts) > 1:
-        return [f"{i+1}. {p}" for i,p in enumerate(parts)]
-    words = prompt.split()
-    if len(words) <= 3: return [f"1. {prompt} を小さく試す"]
-    return [f"1. {words[0]} を始める", f"2. {words[1]} を片付ける", f"3. 終わったら報告する"]
+
 
 
 # ---------- UI components ----------
@@ -375,6 +375,82 @@ def render_tasks_section():
                 st.info(f'『{t.get("title")}』の最初の一歩を実行しました！（ローカルモック）')
         st.markdown('</div>', unsafe_allow_html=True)
 
+
+def render_ai_todos_dashboard():
+    """Fetch AI-generated ToDos from backend and render them in order with simple controls."""
+    st.markdown('<div class="section-header">AI分解 (JSON ToDo ダッシュボード)</div>', unsafe_allow_html=True)
+    prompt = st.text_input('AI分解したい内容', key='ai_todos_prompt')
+    cols = st.columns([3,1])
+    with cols[1]:
+        if st.button('取得', key='fetch_ai_todos'):
+            if not prompt.strip():
+                st.warning('プロンプトを入力してください')
+            else:
+                try:
+                    r = requests.post(f"{API_BASE}/ai/todos", json={"prompt": prompt}, headers=_auth_headers(), timeout=API_TIMEOUT)
+                except Exception as e:
+                    # capture the exception in the UI
+                    st.error(f"ネットワークエラー: {e}")
+                    r = None
+                if not r:
+                    st.warning('バックエンドに接続できません')
+                elif r.status_code != 200:
+                    # If the request timed out on the server side, guide the user to retry
+                    if 'Read timed out' in getattr(r, 'text', ''):
+                        st.info(f'サーバーで処理中のため応答に時間がかかっています（{API_TIMEOUT}s）。再度「取得」を押してみてください。')
+                    st.error(f'エラー: {r.status_code} {r.text}')
+                else:
+                    try:
+                        data = r.json()
+                        st.session_state.ai_todos = data.get('todos', [])
+                        st.session_state.ai_todos_index = 0
+                    except Exception:
+                        st.error('不正なレスポンス')
+
+    # Initialize session state for todos
+    if 'ai_todos' not in st.session_state:
+        st.session_state.ai_todos = []
+    if 'ai_todos_index' not in st.session_state:
+        st.session_state.ai_todos_index = 0
+
+    todos = st.session_state.ai_todos
+    idx = st.session_state.ai_todos_index
+
+    if not todos:
+        st.markdown('<div>AIで分解されたタスクが未取得です。上の「取得」を押してください。</div>', unsafe_allow_html=True)
+        return
+
+    # Display current todo in order
+    st.markdown(f'**進行中のタスク ({idx+1}/{len(todos)})**')
+    current = todos[idx]
+    st.markdown(f"- ID: {current.get('id')}  \n- タイトル: {current.get('title')}  \n- ステータス: {current.get('status')}")
+
+    c1, c2, c3 = st.columns([1,1,1])
+    with c1:
+        if st.button('完了にする', key=f'complete_ai_{idx}'):
+            todos[idx]['status'] = 'done'
+            st.session_state.ai_todos = todos
+            st.experimental_rerun()
+    with c2:
+        if st.button('次へ', key=f'next_ai_{idx}'):
+            if idx + 1 < len(todos):
+                st.session_state.ai_todos_index = idx + 1
+            else:
+                st.success('すべてのタスクを表示しました')
+            st.experimental_rerun()
+    with c3:
+        if st.button('タスクを作成', key=f'create_ai_{idx}'):
+            # call create_task to add to tasks list (will fallback locally if unauthorized)
+            create_task(current.get('title'))
+            st.success('タスク作成リクエストを送信しました')
+
+    # Show list of remaining tasks
+    st.markdown('### 残りのタスク')
+    for i, t in enumerate(todos):
+        status = t.get('status', 'pending')
+        prefix = '✓ ' if status == 'done' else ''
+        st.write(f"{i+1}. {prefix}{t.get('title')}")
+
 def render_chat_ai():
     st.markdown('<div class="section-header">チャット & AI分解</div>', unsafe_allow_html=True)
     # Assumes a top-level chat_input was used in main() and stored into st.session_state.chat_pending
@@ -407,17 +483,8 @@ def render_chat_ai():
         else:
             st.markdown('<div>チャットがありません</div>', unsafe_allow_html=True)
     with ai_col:
-        st.markdown('**AI分解**')
-        prompt = st.text_area('やりたいことを入力', key='ai_prompt')
-        if st.button('分解する'):
-            steps = ai_decompose(prompt)
-            if steps:
-                for s in steps: st.write(s)
-                if st.button('タスクを一括作成'):
-                    for s in steps:
-                        create_task(s)
-                    st.success('AI分解をタスクとして一括追加しました')
-            else: st.warning('分解できませんでした')
+        # AI 分解 UI を削除しました。AI 分解は「AI ツール」タブに統合されています。
+        st.markdown('<div>AI分解は「AI ツール」タブで利用できます。</div>', unsafe_allow_html=True)
 
 def render_sidebar():
     st.markdown('### Sista設定')
@@ -466,24 +533,126 @@ def main():
     with t1:
         st.markdown('## ダッシュボード')
         render_tasks_section()
+        render_ai_todos_dashboard()
     with t2:
         st.markdown('## チャット')
         render_chat_ai()
     with t3:
         st.markdown('## AI ツール')
-        # reuse ai area from render_chat_ai (ai col), or provide a dedicated area
         st.markdown('AI分解と一括タスク作成')
         prompt = st.text_area('やりたいことを入力（AI分解）', key='ai_prompt_tab')
         if st.button('分解してタスク化', key='ai_decompose_tab'):
-            steps = ai_decompose(prompt)
-            if steps:
-                for s in steps: st.write(s)
-                if st.button('タスクを一括作成', key='ai_to_tasks_tab'):
-                    for s in steps:
-                        create_task(s)
-                    st.success('AI分解をタスクとして一括追加しました')
+            todos = None
+            server_response = None
+            r = None
+            r_json = None
+            error_detail = None
+            try:
+                r = requests.post(f"{API_BASE}/ai/todos", json={"prompt": prompt}, headers=_auth_headers(), timeout=API_TIMEOUT)
+                server_response = r
+                if r.status_code == 200:
+                    try:
+                        r_json = r.json()
+                        todos = r_json.get('todos', [])
+                    except Exception as e:
+                        error_detail = f"JSON decode error: {e}"
+                else:
+                    error_detail = f"Status: {r.status_code}, Body: {r.text}"
+            except Exception as e:
+                error_detail = f"Request error: {e}"
+
+            with st.expander('AI分解APIレスポンス詳細', expanded=True):
+                st.write({
+                    'status_code': getattr(r, 'status_code', None),
+                    'body': getattr(r, 'text', None),
+                    'json': r_json,
+                    'error_detail': error_detail
+                })
+
+            # Detect server-side LLM errors returned in debug
+            llm_error_msg = None
+            if r_json and isinstance(r_json, dict):
+                try:
+                    llm_error_msg = r_json.get('debug', {}).get('llm_error')
+                except Exception:
+                    llm_error_msg = None
+
+            if not todos:
+                # タイムアウト系のメッセージがあれば処理中の可能性があるので、再試行を促す
+                if error_detail and 'Read timed out' in str(error_detail):
+                    st.info(f'サーバーで処理中のため応答に時間がかかっています（{API_TIMEOUT}s）。処理が完了している場合は、もう一度「分解してタスク化」を押して結果を取得してください。')
+                    return
+                # choices[0].message.content から箇条書きや番号リストを抽出してタスク化
+                content = None
+                if r_json and isinstance(r_json, dict):
+                    # OpenAI互換形式
+                    try:
+                        content = r_json.get('choices', [{}])[0].get('message', {}).get('content', None)
+                    except Exception:
+                        content = None
+                tasks_from_content = []
+                if content:
+                    import re
+                    # 箇条書きや番号リストを抽出
+                    lines = content.splitlines()
+                    for line in lines:
+                        m = re.match(r"^\s*([0-9]+\.|・|\-|\*)\s*(.+)$", line)
+                        if m:
+                            tasks_from_content.append(m.group(2).strip())
+                    # 箇条書きが1つもなければ、content全体を1タスクとして扱う
+                    if not tasks_from_content and content.strip():
+                        tasks_from_content = [content.strip()]
+                if tasks_from_content:
+                    todos = [{ 'id': i+1, 'title': t, 'status': 'pending', 'order': i+1 } for i, t in enumerate(tasks_from_content)]
+            if not todos:
+                st.error('AI分解API（LMstudio）から分解結果を取得できませんでした。サーバーが起動しているか、レスポンス形式を確認してください。')
+                return
+            # If the backend reports an LLM-level error (e.g. LMStudio couldn't reach the model),
+            # do NOT auto-create tasks unless the user explicitly forces creation.
+            if llm_error_msg:
+                with st.expander('バックエンドのLLM接続エラー詳細（処理を中断しました）', expanded=True):
+                    st.error(llm_error_msg)
+                    st.write('バックエンドは一時的にLLMへ接続できなかったため、出力は信頼できない可能性があります。自動でタスク化は行いません。')
+                force = st.checkbox('LLM接続エラーを無視して、分解された内容をタスク化する', key='force_create_ai_todos')
+                if not force:
+                    st.warning('タスク作成は保留されました。問題を確認してから再度お試しください。')
+                    return
+                else:
+                    st.info('LLM接続エラーを無視して、ユーザーの許可でタスクを作成します')
+
             else:
-                st.warning('分解できませんでした')
+                st.markdown('### 分解結果')
+                with st.expander('分解結果（展開）', expanded=True):
+                    st.markdown('<div style="max-height:220px;overflow-y:auto;padding:6px;border:1px solid #eee;border-radius:6px">', unsafe_allow_html=True)
+                    for i, t in enumerate(todos):
+                        st.write(f"{i+1}. {t.get('title')}")
+                    st.markdown('</div>', unsafe_allow_html=True)
+
+                # Create tasks on server and show concise result
+                created = []
+                for t in todos:
+                    title = t.get('title')
+                    payload = {'title': title}
+                    url = f"{API_BASE}/tasks"
+                    try:
+                        resp = requests.post(url, json=payload, headers=_auth_headers(), timeout=5)
+                        success = resp.status_code in (200,201)
+                        created.append({'title': title, 'ok': success, 'status_code': resp.status_code if hasattr(resp, 'status_code') else None})
+                    except Exception as e:
+                        created.append({'title': title, 'ok': False, 'error': str(e)})
+
+                # Show concise summary inside an expander
+                with st.expander('作成結果（簡潔表示）', expanded=True):
+                    for c in created:
+                        if c.get('ok'):
+                            st.success(f"作成成功: {c.get('title')}")
+                        else:
+                            st.error(f"作成失敗: {c.get('title')} - {c.get('error', c.get('status_code'))}")
+
+                # 分解したタスクをダッシュボードのタスク一覧に自動で反映
+                st.session_state.tasks_cache = None
+                fetch_tasks()
+                st.success('分解したタスクをダッシュボードに追加しました')
     with t4:
         st.markdown('## 設定')
         render_sidebar()
