@@ -16,10 +16,13 @@ services:
       context: ./backend
     environment:
       DATABASE_URL: postgresql://postgres:postgres@db:5432/sista
+      # use host.docker.internal so container can reach a host-registered LMStudio service
+      LMSTUDIO_URL: ${LMSTUDIO_URL:-http://host.docker.internal:1234}
     depends_on:
       - db
     ports:
-      - "8000:8000"
+      # publish backend on host port 8030 per user request (container still listens on 8000)
+      - "8030:8000"
     volumes:
       - ./backend:/app
 

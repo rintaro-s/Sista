@@ -44,8 +44,9 @@ export default function Home(): React.ReactElement {
   const [currentView, setCurrentView] = useState<string>("tasks");
   const [tasks, setTasks] = useState<Task[]>([]);
 
-  const [userToken, setUserToken] = useState<string | null>(typeof window !== 'undefined' ? localStorage.getItem('sista_token') : null);
-  const [username, setUsername] = useState<string | null>(typeof window !== 'undefined' ? localStorage.getItem('sista_user') : null);
+  // don't read localStorage during render to avoid SSR/CSR mismatch
+  const [userToken, setUserToken] = useState<string | null>(null);
+  const [username, setUsername] = useState<string | null>(null);
   const [showAuthModal, setShowAuthModal] = useState(false);
   const [authMode, setAuthMode] = useState<'login'|'register'>('login');
   const [authName, setAuthName] = useState('');
@@ -58,6 +59,7 @@ export default function Home(): React.ReactElement {
   const [motivation, setMotivation] = useState<number>(50);
 
   const addTask = () => {
+    if (!userToken) return;
     if (!newTask.trim()) return;
     const payload = {
       title: newTask,
@@ -67,7 +69,7 @@ export default function Home(): React.ReactElement {
     };
     const headers: any = { "Content-Type": "application/json" };
     if (userToken) headers['Authorization'] = `Bearer ${userToken}`;
-    fetch("http://localhost:8000/tasks", {
+    fetch("http://localhost:8030/tasks", {
       method: "POST",
       headers,
       body: JSON.stringify({ ...payload, user_id: undefined }),
@@ -82,9 +84,9 @@ export default function Home(): React.ReactElement {
   };
 
   const updateTaskStatus = (taskId: number, newStatus: Task["status"]) => {
-    const headers: any = { "Content-Type": "application/json" };
-    if (userToken) headers['Authorization'] = `Bearer ${userToken}`;
-    fetch(`http://localhost:8000/tasks/${taskId}`, {
+    if (!userToken) return;
+    const headers: any = { "Content-Type": "application/json", 'Authorization': `Bearer ${userToken}` };
+    fetch(`http://localhost:8030/tasks/${taskId}`, {
       method: "PUT",
       headers,
       body: JSON.stringify({ title: tasks.find(t => t.id === taskId)?.title || '', status: newStatus, category: tasks.find(t => t.id === taskId)?.category, user_id: undefined }),
@@ -95,29 +97,52 @@ export default function Home(): React.ReactElement {
   };
 
   const deleteTask = (taskId: number) => {
-  const headers: any = {};
-  if (userToken) headers['Authorization'] = `Bearer ${userToken}`;
-  fetch(`http://localhost:8000/tasks/${taskId}`, { method: "DELETE", headers })
+  if (!userToken) return;
+  const headers: any = { 'Authorization': `Bearer ${userToken}` };
+  fetch(`http://localhost:8030/tasks/${taskId}`, { method: "DELETE", headers })
       .then(() => setTasks((p) => p.filter((t) => t.id !== taskId)))
       .catch(console.error);
   };
 
-  // load tasks
+  // on mount load auth from localStorage (client-only) to avoid SSR/CSR mismatch
   React.useEffect(() => {
-    const headers: any = {};
-    if (userToken) headers['Authorization'] = `Bearer ${userToken}`;
-    fetch("http://localhost:8000/tasks", { headers })
-      .then((r) => r.json())
+    try {
+      const token = localStorage.getItem('sista_token');
+      const user = localStorage.getItem('sista_user');
+      if (token) setUserToken(token);
+      if (user) setUsername(user);
+    } catch (e) {
+      // ignore (no localStorage in some environments)
+    }
+  }, []);
+
+  // load tasks whenever auth state changes
+  React.useEffect(() => {
+    if (!userToken) {
+      setTasks([]);
+      return;
+    }
+    const headers: any = { 'Authorization': `Bearer ${userToken}` };
+    fetch("http://localhost:8030/tasks", { headers })
+      .then((r) => {
+        if (!r.ok) throw new Error('not authorized');
+        return r.json();
+      })
       .then((data) => {
         setTasks(data.map((d: any) => ({ id: d.id, title: d.title, status: d.status, category: d.category || 'personal', dueDate: d.due_date || '' })));
       })
-      .catch(console.error);
-  }, []);
+      .catch((err) => {
+        console.error(err);
+        if (err.message && err.message.includes('not authorized')) {
+          logout();
+        }
+      });
+  }, [userToken]);
 
   // auth actions
   const doAuth = () => {
     const url = authMode === 'login' ? '/auth/login' : '/auth/register';
-    fetch(`http://localhost:8000${url}`, {
+    fetch(`http://localhost:8030${url}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ username: authName, password: authPass }),
@@ -144,6 +169,7 @@ export default function Home(): React.ReactElement {
     localStorage.removeItem('sista_user');
     setUserToken(null);
     setUsername(null);
+    setTasks([]);
   }
 
   return (
@@ -154,34 +180,45 @@ export default function Home(): React.ReactElement {
             <div className="flex items-center space-x-4">
               <h1 className="text-2xl font-semibold text-gray-900">Sista</h1>
               <nav className="flex space-x-6" role="navigation" aria-label="メインメニュー">
-                <button aria-pressed={currentView === "tasks"} onClick={() => setCurrentView("tasks")} className={`text-base font-medium ${currentView === "tasks" ? "text-gray-900 border-b-2 border-gray-900" : "text-gray-500 hover:text-gray-700"} pb-4`}>
+                <button aria-pressed={currentView === "tasks"} onClick={() => userToken && setCurrentView("tasks")} aria-disabled={!userToken} className={`text-base font-medium ${currentView === "tasks" ? "text-gray-900 border-b-2 border-gray-900" : "text-gray-500 hover:text-gray-700"} pb-4 nav-button ${!userToken ? 'disabled' : ''}`}>
                   タスク
                 </button>
-                <button aria-pressed={currentView === "calendar"} onClick={() => setCurrentView("calendar")} className={`text-base font-medium ${currentView === "calendar" ? "text-gray-900 border-b-2 border-gray-900" : "text-gray-500 hover:text-gray-700"} pb-4`}>
+                <button aria-pressed={currentView === "calendar"} onClick={() => userToken && setCurrentView("calendar")} aria-disabled={!userToken} className={`text-base font-medium ${currentView === "calendar" ? "text-gray-900 border-b-2 border-gray-900" : "text-gray-500 hover:text-gray-700"} pb-4 nav-button ${!userToken ? 'disabled' : ''}`}>
                   カレンダー
                 </button>
-                <button aria-pressed={currentView === "chat"} onClick={() => setCurrentView("chat")} className={`text-base font-medium ${currentView === "chat" ? "text-gray-900 border-b-2 border-gray-900" : "text-gray-500 hover:text-gray-700"} pb-4`}>
+                <button aria-pressed={currentView === "chat"} onClick={() => userToken && setCurrentView("chat")} aria-disabled={!userToken} className={`text-base font-medium ${currentView === "chat" ? "text-gray-900 border-b-2 border-gray-900" : "text-gray-500 hover:text-gray-700"} pb-4 nav-button ${!userToken ? 'disabled' : ''}`}>
                   アシスタント
                 </button>
               </nav>
             </div>
             <div className="flex items-center space-x-4">
-              {username ? (
-                <div className="flex items-center space-x-3">
-                  <div className="text-sm text-gray-700">{username}</div>
-                  <button onClick={logout} className="px-3 py-1 bg-red-50 text-red-600 rounded">ログアウト</button>
-                </div>
-              ) : (
-                <button onClick={() => { setAuthMode('login'); setShowAuthModal(true); }} className="px-3 py-1 bg-gray-100 rounded">ログイン</button>
-              )}
+                {username ? (
+                  <div className="flex items-center space-x-3">
+                    <div className="text-sm text-gray-700">{username}</div>
+                    <button onClick={logout} className="px-3 py-1 bg-red-50 text-red-600 rounded" aria-disabled={!userToken}>ログアウト</button>
+                  </div>
+                ) : (
+                  <button onClick={() => { setAuthMode('login'); setShowAuthModal(true); }} className="px-3 py-1 bg-gray-100 rounded" aria-disabled={!userToken}>ログイン</button>
+                )}
             </div>
           </div>
         </div>
       </header>
 
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-        {currentView === "tasks" && (
-          <div className="space-y-6">
+        {!userToken ? (
+          <div className="min-h-[60vh] flex flex-col items-center justify-center">
+            <h2 className="text-2xl font-bold mb-4">Sista にログインしてください</h2>
+            <p className="text-gray-600 mb-6">ログインすると自分専用のタスクが表示されます。</p>
+            <div className="space-x-3">
+              <button onClick={() => { setAuthMode('login'); setShowAuthModal(true); }} className="px-6 py-3 bg-gray-900 text-white rounded-md">ログイン</button>
+              <button onClick={() => { setAuthMode('register'); setShowAuthModal(true); }} className="px-6 py-3 border border-gray-200 rounded-md">アカウント作成</button>
+            </div>
+          </div>
+        ) : (
+          <>
+            {currentView === "tasks" && (
+              <div className="space-y-6">
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
               <div className="flex items-center space-x-4 w-full sm:w-auto">
                 <div className="relative w-full sm:w-64">
@@ -209,9 +246,10 @@ export default function Home(): React.ReactElement {
               </div>
               <div className="flex-shrink-0">
                 <button
-                  onClick={() => setShowAddForm((v) => !v)}
-                  className="inline-flex items-center px-5 py-3 border border-transparent text-base font-medium rounded-lg text-white bg-gray-900 hover:bg-gray-800 focus:outline-none focus:ring-2 focus:ring-gray-500"
+                  onClick={() => userToken && setShowAddForm((v) => !v)}
+                  className={`inline-flex items-center px-5 py-3 border border-transparent text-base font-medium rounded-lg text-white bg-gray-900 hover:bg-gray-800 focus:outline-none focus:ring-2 focus:ring-gray-500 ${!userToken ? 'opacity-40 pointer-events-none' : ''}`}
                   aria-expanded={showAddForm}
+                  aria-disabled={!userToken}
                 >
                   <Plus className="w-5 h-5 mr-3" />
                   新規タスク
@@ -295,43 +333,45 @@ export default function Home(): React.ReactElement {
               </div>
               <span className="text-cyan-500 font-bold ml-2">{motivation}%</span>
             </div>
-          </div>
-        )}
-
-        {currentView === "calendar" && (
-          <div className="text-center py-12">
-            <Calendar className="w-12 h-12 text-gray-400 mx-auto mb-4" />
-            <h3 className="text-lg font-medium text-gray-900 mb-2">カレンダー機能</h3>
-            <p className="text-gray-500">カレンダービューは開発中です</p>
-          </div>
-        )}
-
-        {currentView === "chat" && (
-          <div className="max-w-2xl mx-auto">
-            <div className="bg-white border border-gray-200 rounded-lg">
-              <div className="p-4 border-b border-gray-200">
-                <h2 className="text-lg font-medium text-gray-900">Sistaアシスタント</h2>
-                <p className="text-sm text-gray-500">タスク管理をサポートします</p>
               </div>
-              <div className="p-6 h-96 overflow-y-auto space-y-4">
-                <div className="flex space-x-3">
-                  <div className="w-10 h-10 bg-gray-200 rounded-full flex items-center justify-center">
-                    <span className="text-sm font-medium text-gray-600">S</span>
+            )}
+
+            {currentView === "calendar" && (
+              <div className="text-center py-12">
+                <Calendar className="w-12 h-12 text-gray-400 mx-auto mb-4" />
+                <h3 className="text-lg font-medium text-gray-900 mb-2">カレンダー機能</h3>
+                <p className="text-gray-500">カレンダービューは開発中です</p>
+              </div>
+            )}
+
+            {currentView === "chat" && (
+              <div className="max-w-2xl mx-auto">
+                <div className="bg-white border border-gray-200 rounded-lg">
+                  <div className="p-4 border-b border-gray-200">
+                    <h2 className="text-lg font-medium text-gray-900">Sistaアシスタント</h2>
+                    <p className="text-sm text-gray-500">タスク管理をサポートします</p>
                   </div>
-                  <div className="flex-1">
-                    <p className="text-sm text-gray-900">こんにちは！今日のタスクをチェックしましょう。</p>
-                    <p className="text-xs text-gray-500 mt-1">2分前</p>
+                  <div className="p-6 h-96 overflow-y-auto space-y-4">
+                    <div className="flex space-x-3">
+                      <div className="w-10 h-10 bg-gray-200 rounded-full flex items-center justify-center">
+                        <span className="text-sm font-medium text-gray-600">S</span>
+                      </div>
+                      <div className="flex-1">
+                        <p className="text-sm text-gray-900">こんにちは！今日のタスクをチェックしましょう。</p>
+                        <p className="text-xs text-gray-500 mt-1">2分前</p>
+                      </div>
+                    </div>
+                  </div>
+                  <div className="p-4 border-t border-gray-200">
+                    <div className="flex space-x-3">
+                      <input type="text" placeholder="メッセージを入力..." value={""} onChange={() => { }} className="flex-1 px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm" />
+                      <button className="px-4 py-2 bg-gray-900 text-white text-sm rounded-md hover:bg-gray-800">送信</button>
+                    </div>
                   </div>
                 </div>
               </div>
-              <div className="p-4 border-t border-gray-200">
-                <div className="flex space-x-3">
-                  <input type="text" placeholder="メッセージを入力..." value={""} onChange={() => { }} className="flex-1 px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm" />
-                  <button className="px-4 py-2 bg-gray-900 text-white text-sm rounded-md hover:bg-gray-800">送信</button>
-                </div>
-              </div>
-            </div>
-          </div>
+            )}
+          </>
         )}
 
       </main>

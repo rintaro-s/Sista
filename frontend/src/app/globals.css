@@ -3,40 +3,133 @@
 @tailwind utilities;
 
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --bg-1: #0f172a; /* deep navy */
+  --bg-2: #071028; /* near-black */
+  --accent-1: #ff4da6; /* vivid pink */
+  --accent-2: #00e5ff; /* cyan */
+  --glass-white: rgba(255,255,255,0.08);
+  --card-bg: rgba(255,255,255,0.03);
+  --muted: #94a3b8;
+  --radius-xl: 14px;
 }
 
-@theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
-}
-
-@media (prefers-color-scheme: dark) {
+@media (prefers-color-scheme: light) {
   :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
+    --bg-1: linear-gradient(180deg, #f8fafc 0%, #eef2f7 100%);
+    --bg-2: #ffffff;
+    --glass-white: rgba(255,255,255,0.7);
+    --card-bg: rgba(255,255,255,0.9);
+    --muted: #6b7280;
   }
 }
 
+/* Global base */
+html, body, #__next {
+  height: 100%;
+}
+
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  background: radial-gradient(1200px 600px at 10% 10%, rgba(0,229,255,0.08), transparent), radial-gradient(900px 400px at 90% 90%, rgba(255,77,166,0.06), transparent), var(--bg-2);
+  color: #e6eef8;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial;
+  line-height: 1.4;
 }
 
-/* UI tweaks */
-.card {
-  @apply bg-white rounded-xl shadow-md;
+/* Container */
+.container-lg { max-width: 1100px; margin-left: auto; margin-right: auto; padding-left: 16px; padding-right: 16px; }
+
+/* Header */
+header { background: linear-gradient(90deg, rgba(255,255,255,0.02), rgba(255,255,255,0.01)); backdrop-filter: blur(6px); }
+.site-title { font-weight: 800; letter-spacing: -0.02em; font-size: 1.25rem; color: white; text-shadow: 0 2px 18px rgba(0,0,0,0.6); }
+
+/* Nav & disabled state for unauthenticated */
+.nav-button { @apply text-sm font-semibold text-gray-200 px-3 py-2 rounded-md transition; }
+.nav-button:hover { color: white; transform: translateY(-2px); }
+.nav-button[aria-disabled="true"], .nav-button.disabled {
+  opacity: 0.35;
+  pointer-events: none;
+  filter: grayscale(30%);
 }
 
-.btn-primary {
-  @apply bg-gradient-to-r from-pink-500 to-cyan-500 text-white px-4 py-2 rounded-lg shadow;
+/* Primary flashy button */
+.btn-flash {
+  background: linear-gradient(90deg, var(--accent-1), var(--accent-2));
+  padding: 0.6rem 1.1rem;
+  border-radius: var(--radius-xl);
+  color: white;
+  box-shadow: 0 10px 30px rgba(0,0,0,0.45), 0 2px 8px rgba(0,229,255,0.08) inset;
+  transition: transform 180ms ease, box-shadow 180ms ease;
+}
+.btn-flash:hover { transform: translateY(-3px) scale(1.01); box-shadow: 0 18px 40px rgba(0,0,0,0.55); }
+
+/* Glass cards */
+.glass-card {
+  background: linear-gradient(180deg, rgba(255,255,255,0.03), rgba(255,255,255,0.01));
+  border: 1px solid rgba(255,255,255,0.04);
+  border-radius: 12px;
+  padding: 14px;
+  box-shadow: 0 8px 30px rgba(2,6,23,0.6);
 }
 
-.glass {
-  background: linear-gradient(135deg, rgba(255,255,255,0.6), rgba(255,255,255,0.4));
-  backdrop-filter: blur(6px);
+/* Emphasized badges */
+.badge {
+  display: inline-flex; align-items: center; gap: 6px; padding: 6px 10px; border-radius: 999px; font-weight: 700; font-size: 12px;
 }
+
+/* Task list tweaks */
+.task-item { border-radius: 12px; overflow: hidden; }
+.task-item .left-accent { border-left-width: 4px; }
+
+/* Motion for small elements */
+.pulse { animation: pulse 2.2s infinite; }
+
+@keyframes pulse { 0% { transform: scale(1); } 50% { transform: scale(1.01); } 100% { transform: scale(1); } }
+
+/* Utility for disabled interactive overlay used before login */
+.disabled-overlay { position: relative; }
+.disabled-overlay::after {
+  content: "";
+  position: absolute; inset: 0; background: linear-gradient(180deg, rgba(0,0,0,0.25), rgba(0,0,0,0.45)); border-radius: inherit; pointer-events: none;
+}
+
+/* small responsive tweaks */
+@media (max-width: 640px) {
+  .site-title { font-size: 1rem; }
+  .container-lg { padding-left: 12px; padding-right: 12px; }
+}
+
+/* Quick fallback styles: applied when Tailwind utilities are not available.
+   These target the semantic structure used in the app so the UI is usable
+   even if Turbopack/Tailwind failed to process classes. */
+html, body { height: 100%; }
+header { display:flex; align-items:center; justify-content:space-between; padding: 12px 16px; position: sticky; top: 0; z-index: 20; background: rgba(10,12,20,0.6); }
+header h1 { margin: 0; color: #fff; font-size: 1.25rem; font-weight: 800; }
+header nav { display:flex; gap: 12px; align-items:center; }
+header nav button { background: transparent; border: none; color: rgba(255,255,255,0.85); padding: 8px 10px; border-radius: 8px; font-weight: 600; cursor: pointer; }
+header nav button[aria-pressed="true"] { border-bottom: 3px solid rgba(255,255,255,0.9); }
+header .auth { display:flex; gap:10px; align-items:center; }
+
+main { max-width: 1100px; margin: 28px auto; padding: 0 16px; }
+.flex-row { display:flex; gap:12px; align-items:center; }
+.search-box { display:flex; align-items:center; gap:8px; }
+input[type="text"], input[aria-label] { padding: 10px 12px; border-radius: 10px; border: 1px solid rgba(0,0,0,0.12); min-width: 220px; }
+select { padding: 10px 12px; border-radius: 10px; border: 1px solid rgba(0,0,0,0.12); }
+
+.btn { display:inline-block; padding: 10px 16px; background: linear-gradient(90deg,#ff4da6,#00e5ff); color: white; border-radius: 12px; font-weight:700; box-shadow: 0 8px 24px rgba(0,0,0,0.35); cursor: pointer; border: none; }
+.btn:disabled, button[aria-disabled="true"] { opacity: 0.45; cursor: default; }
+
+.card { background: rgba(255,255,255,0.04); border: 1px solid rgba(255,255,255,0.04); padding: 14px; border-radius: 12px; box-shadow: inset 0 1px 0 rgba(255,255,255,0.02); }
+.task-list { display:flex; flex-direction:column; gap:12px; }
+.task-item { background: rgba(255,255,255,0.03); padding: 12px; border-radius: 10px; display:flex; justify-content:space-between; align-items:center; border:1px solid rgba(255,255,255,0.03); }
+.task-item h3 { margin:0; font-size: 1rem; color: #e6eef8; }
+.task-meta { color: #94a3b8; font-size: 0.9rem; }
+
+footer { margin: 40px 0; text-align:center; color: rgba(255,255,255,0.6); }
+
+/* make sure modals are visible */
+.fixed { position: fixed; }
+.z-50 { z-index: 9999; }
+
+
