@@ -2,12 +2,14 @@
 
 このリポジトリは、Next.js フロントエンドと FastAPI バックエンド、PostgreSQL を Docker Compose で起動できるフルスタックのサンプル実装です。
 
+# 技術スタック迷走してて使い方グッチャグチャやけどstreamlitとdocker起動したらとりあえずOK♡
+
 目的:
 - タスク（最初の一歩）を作成・一覧・更新・削除できるアプリを、DB で永続化して提供します。
 - フロントは `sample_design.ts` に沿ったモダンな UI を実装しています。
 
 主な構成:
-- frontend/: Next.js + Tailwind の UI
+- frontend/: streamlit
 - backend/: FastAPI + SQLModel（Postgres に永続化）
 - docker-compose.yml: db/backend/frontend をまとめて起動
 
@@ -21,10 +23,10 @@
 ```bash
 docker compose up --build
 ```
-
+<!-- 
 3) アクセス
 - フロントエンド: http://localhost:3000
-- バックエンド（API）: http://localhost:8030/tasks
+- バックエンド（API）: http://localhost:8030/tasks -->
 
 開発メモ
 - バックエンドの依存は `backend/requirements.txt` にあります。
